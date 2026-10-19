@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MAX_HABITS, PRO_MAX_HABITS } from "@/hooks/useQuestStore";
 
 interface PurchaseModalProps {
@@ -9,52 +9,71 @@ interface PurchaseModalProps {
   onPurchase: () => void;
 }
 
-const PRICE = "$4.99";
-const PROCESSING_MS = 1500;
+/**
+ * The upgrade code is baked into the client bundle at build time from the
+ * NEXT_PUBLIC_UPGRADE_CODE env variable. An empty/missing value means no code
+ * has been configured and the upgrade form will always reject.
+ */
+const UPGRADE_CODE = process.env.NEXT_PUBLIC_UPGRADE_CODE ?? "";
 
 export default function PurchaseModal({
   open,
   onClose,
   onPurchase,
 }: PurchaseModalProps) {
-  const [processing, setProcessing] = useState(false);
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  // Reset internal state whenever the modal is (re)opened.
+  // Reset state + focus input each time the modal opens.
   useEffect(() => {
     if (open) {
-      setProcessing(false);
+      setCode("");
+      setError(null);
       setSuccess(false);
       document.body.style.overflow = "hidden";
+      const id = window.setTimeout(() => inputRef.current?.focus(), 0);
+      return () => {
+        window.clearTimeout(id);
+        document.body.style.overflow = "";
+      };
     } else {
       document.body.style.overflow = "";
     }
-    return () => {
-      document.body.style.overflow = "";
-    };
   }, [open]);
 
-  // Close on Escape (only when not mid-transaction).
+  // Close on Escape when not in the success state.
   useEffect(() => {
-    if (!open) return;
+    if (!open || success) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !processing) onClose();
+      if (e.key === "Escape") onClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, processing, onClose]);
+  }, [open, success, onClose]);
 
   if (!open) return null;
 
-  function handlePay() {
-    setProcessing(true);
-    // Simulate a payment gateway round-trip (no real charge).
-    window.setTimeout(() => {
-      setProcessing(false);
-      setSuccess(true);
-      onPurchase();
-      window.setTimeout(() => onClose(), 1300);
-    }, PROCESSING_MS);
+  function handleRedeem(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = code.trim();
+
+    if (!UPGRADE_CODE) {
+      setError("No upgrade code has been configured on this instance.");
+      return;
+    }
+
+    if (trimmed.toUpperCase() !== UPGRADE_CODE.toUpperCase()) {
+      setError("Invalid code. Please check and try again.");
+      return;
+    }
+
+    // Code is correct — apply upgrade and show success.
+    setError(null);
+    setSuccess(true);
+    onPurchase();
+    window.setTimeout(() => onClose(), 1800);
   }
 
   return (
@@ -67,7 +86,7 @@ export default function PurchaseModal({
       {/* Overlay */}
       <div
         className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-        onClick={() => !processing && onClose()}
+        onClick={() => !success && onClose()}
         aria-hidden="true"
       />
 
@@ -79,37 +98,44 @@ export default function PurchaseModal({
           <h2 id="purchase-title" className="text-lg font-bold text-amber-300">
             ⭐ Guildmaster Upgrade
           </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={processing}
-            aria-label="Close"
-            className="rounded-md px-2 py-1 text-slate-400 transition hover:bg-slate-700/50 hover:text-slate-200 disabled:opacity-40"
-          >
-            ✕
-          </button>
+          {!success && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="rounded-md px-2 py-1 text-slate-400 transition hover:bg-slate-700/50 hover:text-slate-200"
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         {success ? (
+          /* ── Success state ── */
           <div className="px-6 py-10 text-center">
             <p className="text-5xl">🎉</p>
             <p className="mt-3 text-lg font-bold text-emerald-300">
-              Upgrade complete!
+              Upgrade unlocked!
             </p>
             <p className="mt-1 text-sm text-slate-400">
               You&apos;re now a Guildmaster. Your quest slots expanded to{" "}
-              {PRO_MAX_HABITS}.
+              <span className="font-semibold text-amber-300">
+                {PRO_MAX_HABITS}
+              </span>
+              .
             </p>
           </div>
         ) : (
-          <div className="px-6 py-5">
+          /* ── Code entry state ── */
+          <form onSubmit={handleRedeem} className="px-6 py-5">
             <p className="text-sm text-slate-300">
-              Expand your active quest limit from{" "}
-              <span className="font-semibold text-slate-100">{MAX_HABITS}</span> to{" "}
+              Expand your quest limit from{" "}
+              <span className="font-semibold text-slate-100">{MAX_HABITS}</span>{" "}
+              to{" "}
               <span className="font-semibold text-amber-300">
                 {PRO_MAX_HABITS}
               </span>{" "}
-              habit slots.
+              habit slots. Enter your upgrade code to unlock.
             </p>
 
             <ul className="mt-4 space-y-2 text-sm text-slate-300">
@@ -118,42 +144,51 @@ export default function PurchaseModal({
                 {PRO_MAX_HABITS} habits at once
               </li>
               <li className="flex items-center gap-2">
-                <span className="text-emerald-400">✓</span> Keep your streaks &
-                all existing quests
+                <span className="text-emerald-400">✓</span> 3 AI assessments per
+                day (vs 1 on free)
               </li>
               <li className="flex items-center gap-2">
-                <span className="text-emerald-400">✓</span> Stored locally — no
-                account needed
+                <span className="text-emerald-400">✓</span> All streaks &amp;
+                data stay intact
               </li>
             </ul>
 
-            <div className="mt-5 flex items-end justify-between rounded-lg border border-slate-700/60 bg-slate-950/50 px-4 py-3">
-              <span className="text-xs uppercase tracking-wider text-slate-500">
-                One-time · simulated
-              </span>
-              <span className="text-2xl font-bold text-amber-300">{PRICE}</span>
+            <div className="mt-5 space-y-2">
+              <label
+                htmlFor="upgrade-code"
+                className="block text-xs font-medium text-slate-300"
+              >
+                Upgrade Code
+              </label>
+              <input
+                id="upgrade-code"
+                ref={inputRef}
+                type="text"
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value);
+                  setError(null);
+                }}
+                placeholder="e.g. GUILDMASTER2025"
+                spellCheck={false}
+                autoComplete="off"
+                className="w-full rounded-lg border border-slate-600 bg-slate-950/60 px-3 py-2 font-mono text-sm uppercase tracking-widest text-slate-100 placeholder-slate-600 transition focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-400/30"
+              />
+              {error && (
+                <p className="text-xs text-red-400" role="alert">
+                  {error}
+                </p>
+              )}
             </div>
 
             <button
-              type="button"
-              onClick={handlePay}
-              disabled={processing}
-              className="mt-4 w-full rounded-lg border border-amber-400/50 bg-amber-500/20 px-5 py-3 text-sm font-semibold text-amber-200 transition hover:border-amber-400 hover:bg-amber-500/30 disabled:cursor-wait disabled:opacity-70"
+              type="submit"
+              disabled={code.trim().length === 0}
+              className="mt-4 w-full rounded-lg border border-amber-400/50 bg-amber-500/20 px-5 py-3 text-sm font-semibold text-amber-200 transition enabled:hover:border-amber-400 enabled:hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {processing ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-300 border-t-transparent" />
-                  Processing simulated payment...
-                </span>
-              ) : (
-                `Simulate Payment (${PRICE})`
-              )}
+              Redeem Code
             </button>
-
-            <p className="mt-3 text-center text-xs text-slate-600">
-              Simulation only — no real charge, no card required.
-            </p>
-          </div>
+          </form>
         )}
       </div>
     </div>
